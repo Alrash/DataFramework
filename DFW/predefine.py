@@ -3,8 +3,9 @@ __author__ = 'Alrash'
 
 
 DEFAULT_LOAD_DATABASE_CONFIG = {
-    'format': 'done_{name}.mat',
-    'group': 'group',
-    'group_rand': 'group_rand',
+    'format': {'default': 'done_{name}.mat'},
+    'isint': False,
+    'group': {'default': 'group'},
+    'group_rand': {'default': 'group_rand'},
     'num': 1
 }
