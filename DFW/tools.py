@@ -23,7 +23,8 @@ def totuple(item):
 
 # for example, [1] => 1, "str" => "str", ["str"] => "str"
 def leave_iterable(item):
-    return item[0] if isinstance(item, Iterable) and len(item) == 1 else item
+    return (list(item.values())[0] if isinstance(item, dict) else item[0]) \
+        if isinstance(item, Iterable) and len(item) == 1 else item
 
 
 def check_item_type(item, support_type, iter_type = None) -> bool:
