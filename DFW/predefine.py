@@ -16,6 +16,7 @@ DEFAULT_LOAD_DATABASE_CONFIG = {
 
 DEFAULT_PREPROCESS_DATA_CONFIG = {
     'center': True,
+    'extend': False,
     'cv': 5,
     'train': {DEFAULT_KEY_NAME: 0.5}
 }

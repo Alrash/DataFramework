@@ -32,24 +32,81 @@ class PreProcessTransfer:
         self.__special_key_type = {
             'cv': ([int], None),
             'train': ([int, float, tuple, list], [int, float]),
-            'center': ([bool], None)
+            'extend': ([bool], None),
+            'center': ([bool], None),
         }
         # cut => train and test
         # cv => cross validation
-        self._config, self._cut_index, self._cv_index = None, {}, {}
-        self._decode(default_preprocess_config, config['precess'] if 'precess' in config.keys() else {})._cut_database()
+        self._config, self._cut_index, self._cv_index, self._cv_data = None, {}, {}, {}
+        self._class_num = {}
+        self._decode(default_preprocess_config, config['process'] if 'process' in config.keys() else {})._cut_database()
 
-    def generator(self, no: int = 0, force: bool = False):
-        pass
+    def generator(self, train_setting, database: str, no: int = 0, force: bool = False):
+        # init
+        train, test, train_y, test_y, self._cv_data = {}, {}, {}, {}, {}
+
+        for descriptor in self._data[database]:
+            train[descriptor], train_y[descriptor], test[descriptor], test_y[descriptor] = \
+                np.array([]), np.array([], dtype = np.int64), np.array([]), np.array([], dtype = np.int64)
+            self._cv_data[descriptor] = {}
+            for k in range(self._data[database][descriptor]['x'].shape[-1]):
+                class_data = self._data[database][descriptor]['x'][k][self._data[database][descriptor]['r'][k][no, :], :]
+                # extend data with 1
+                class_data = self._array_concatenate(class_data, np.ones((class_data.shape[0], 1)), axis = 1) \
+                    if self._config[database]['extend'] else class_data
+                # cut
+                train[descriptor] = self._array_concatenate(train[descriptor], class_data[self._cut_index[database][descriptor][k][train_setting]['train'], :])
+                train_y[descriptor] = self._array_concatenate(train_y[descriptor], np.full(self._cut_index[database][descriptor][k][train_setting]['train'].shape[-1], k))
+                test[descriptor] = self._array_concatenate(test[descriptor], class_data[self._cut_index[database][descriptor][k][train_setting]['test'], :])
+                test_y[descriptor] = self._array_concatenate(test_y[descriptor], np.full(self._cut_index[database][descriptor][k][train_setting]['test'].shape[-1], k))
+
+            # transpose
+            train[descriptor] = train[descriptor].T
+            test[descriptor] = test[descriptor].T
+
+            # cv
+            for i in range(self._config[database]['cv']):
+                self._cv_data[descriptor][i] = {
+                    'train': train[descriptor][:, self._cv_index[database][descriptor][train_setting][i]['train']],
+                    'train_y': train_y[descriptor][self._cv_index[database][descriptor][train_setting][i]['train']],
+                    'test': train[descriptor][:, self._cv_index[database][descriptor][train_setting][i]['test']],
+                    'test_y': train_y[descriptor][self._cv_index[database][descriptor][train_setting][i]['test']],
+                }
+
+            if self._config[database]['center']:
+                center = np.mean(train[descriptor], axis = 1).reshape(-1, 1)
+                train[descriptor] -= np.tile(center, (1, train[descriptor].shape[1]))
+                test[descriptor] -= np.tile(center, (1, test[descriptor].shape[1]))
+
+                for i in range(self._config[database]['cv']):
+                    center = np.mean(self._cv_data[descriptor][i]['train'], axis = 1).reshape(-1, 1)
+                    self._cv_data[descriptor][i]['train'] -= np.tile(center, (1, self._cv_data[descriptor][i]['train'].shape[1]))
+                    self._cv_data[descriptor][i]['test'] -= np.tile(center, (1, self._cv_data[descriptor][i]['test'].shape[1]))
+
+        if force:
+            return train, train_y, test, test_y
+        else:
+            return leave_iterable(train), leave_iterable(train_y), leave_iterable(test), leave_iterable(test_y)
+
+    def get_cv_data(self, cv: int = 0, force: bool = False):
+        data = {}
+        for descriptor in self._cv_data:
+            data[descriptor] = self._cv_data[descriptor][cv]
+
+        return data if force else leave_iterable(data)
 
     def _transfer(self):
         pass
 
+    @ staticmethod
+    def _array_concatenate(a: np.ndarray, b: np.ndarray, axis = 0):
+        return np.concatenate((a, b), axis = axis) if a.size != 0 else b
+
     # cut database and save it's index
     def _cut_database(self) -> 'PreProcessTransfer':
-        database_index_list, database_cv_index_list = {}, {}
+        database_index_list, database_cv_index_list, class_num = {}, {}, {}
         for database in self._databases:
-            database_index_list[database], database_cv_index_list[database] = {}, {}
+            database_index_list[database], database_cv_index_list[database], class_num[database] = {}, {}, {}
             for descriptor in self._data[database]:
                 # init
                 database_index_list[database][descriptor], database_cv_index_list[database][descriptor], offset = {}, {}, {}
@@ -60,6 +117,7 @@ class PreProcessTransfer:
                         database_cv_index_list[database][descriptor][train_setting][i] = {'train': np.array([], dtype = np.int64), 'test': np.array([], dtype = np.int64)}
                 # end for train_setting
 
+                class_num[database][descriptor] = self._data[database][descriptor]['x'].shape[-1]
                 # calculate in each class
                 for k in range(self._data[database][descriptor]['x'].shape[-1]):
                     origin, cv = self._cut_one_class(self._data[database][descriptor]['x'][k].shape[0], database)
@@ -76,16 +134,12 @@ class PreProcessTransfer:
                         # end for i
                         # update for
                         offset[train_setting] += origin[train_setting]['train'].shape[-1]
-                        print('class [%d]: train %d, cv train %d, cv test %d, offset %d' % \
-                              (k, origin[train_setting]['train'].shape[-1], \
-                               cv[train_setting][0]['train'].shape[-1], cv[train_setting][0]['test'].shape[-1],\
-                               offset[train_setting]))
                     # end for train_setting
                 # end for k
             # end for descriptor
         # end for database
 
-        self._cut_index, self._cv_index = database_index_list, database_cv_index_list
+        self._cut_index, self._cv_index, self._class_num = database_index_list, database_cv_index_list, class_num
         return self
 
     def _cut_one_class(self, data_size: int, name: str) -> tuple:
@@ -223,11 +277,17 @@ class PreProcessTransfer:
                 else tuple([self._config[database]['train']])
         return self
 
+    def get_class_num(self, name, descriptor: str = DEFAULT_KEY_NAME):
+        return self._class_num[name][descriptor]
+
     def get_train(self, force: bool = False):
         train = {}
         for database in self._databases:
             train[database] = self._config[database]['train']
         return train if force else leave_iterable(train)
+
+    def get_cv(self, name: str) -> int:
+        return self._config[name]['cv']
 
     @ property
     def train(self):
@@ -360,6 +420,8 @@ class LoadFeatureFromMatFile:
 
         for i in range(new['x'].shape[-1]):
             new['x'][i] = np.transpose(new['x'][i][:-1] if labeled else new['x'][i][:-1])
+            if new['r'][i][0, :].max() == new['r'][i][0, :].shape[-1]:
+                new['r'][i] -= 1
 
         return new
 
@@ -414,3 +476,42 @@ class LoadFeatureFromMatFile:
     @ property
     def name(self):
         return self._config['name']
+
+
+class Lambda:
+    def __init__(self, lmd_group):
+        self.group = lmd_group
+
+        self.__shape = (0, 0)
+        self.__preproce_lmd_group(self.group)
+
+    # generate the whole lambda choice in rows
+    def __preproce_lmd_group(self, group):
+        self.__choice_set = np.array(group[-1] if type(group[-1]) == list else [group[-1]])
+        for index in range(len(group) - 2, -1, -1):
+            group[index] = group[index] if type(group[index]) == list else [group[index]]
+            new = np.kron(np.ones(np.array(group[index]).shape[0]), self.__choice_set)
+            self.__choice_set = np.vstack(  ( np.kron(group[index], np.ones(self.__choice_set.shape[-1])), new )  )
+
+        self.__choice_set = self.__choice_set.transpose()
+        self.__shape = self.__choice_set.shape
+
+    def get_lmd_choice_set(self) -> np.ndarray:
+        return self.__choice_set
+
+    def get_lmd_choice_by_index(self, index = 0) -> np.ndarray:
+        return self.__choice_set[index, :]
+
+    # start from 1
+    def get_lmd_from_group_by_pos(self, pos = 1):
+        return self.group[pos - 1]
+
+    # index, start from 0
+    def get_lmd_from_group_by_index(self, index = 0):
+        return self.group[index]
+
+    def get_lmd_choice_set_num(self) -> int:
+        return self.__shape[0]
+
+    def get_lmd_num(self) -> int:
+        return self.__shape[1]
